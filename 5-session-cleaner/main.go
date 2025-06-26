@@ -20,12 +20,16 @@ package main
 import (
 	"errors"
 	"log"
+	"sync"
+	"time"
 )
 
 // SessionManager keeps track of all sessions from creation, updating
 // to destroying.
 type SessionManager struct {
-	sessions map[string]Session
+	sessions     map[string]Session
+	sessionTimes map[string]time.Time
+	mu           sync.Mutex
 }
 
 // Session stores the session's data
@@ -36,10 +40,33 @@ type Session struct {
 // NewSessionManager creates a new sessionManager
 func NewSessionManager() *SessionManager {
 	m := &SessionManager{
-		sessions: make(map[string]Session),
+		sessions:     make(map[string]Session),
+		sessionTimes: make(map[string]time.Time),
 	}
 
+	// Start the session cleaner goroutine automatically
+	go m.sessionCleaner()
+
 	return m
+}
+
+// sessionCleaner runs in the background and removes expired sessions
+func (m *SessionManager) sessionCleaner() {
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
+
+	for {
+		<-ticker.C
+		m.mu.Lock()
+		for sessionID, lastUpdate := range m.sessionTimes {
+			if time.Since(lastUpdate).Seconds() >= 5 {
+				delete(m.sessionTimes, sessionID)
+				delete(m.sessions, sessionID)
+				log.Printf("Session %s expired and removed", sessionID)
+			}
+		}
+		m.mu.Unlock()
+	}
 }
 
 // CreateSession creates a new session and returns the sessionID
@@ -49,9 +76,12 @@ func (m *SessionManager) CreateSession() (string, error) {
 		return "", err
 	}
 
+	m.mu.Lock()
 	m.sessions[sessionID] = Session{
 		Data: make(map[string]interface{}),
 	}
+	m.sessionTimes[sessionID] = time.Now()
+	m.mu.Unlock()
 
 	return sessionID, nil
 }
@@ -63,7 +93,9 @@ var ErrSessionNotFound = errors.New("SessionID does not exists")
 // GetSessionData returns data related to session if sessionID is
 // found, errors otherwise
 func (m *SessionManager) GetSessionData(sessionID string) (map[string]interface{}, error) {
+	m.mu.Lock()
 	session, ok := m.sessions[sessionID]
+	m.mu.Unlock()
 	if !ok {
 		return nil, ErrSessionNotFound
 	}
@@ -78,9 +110,12 @@ func (m *SessionManager) UpdateSessionData(sessionID string, data map[string]int
 	}
 
 	// Hint: you should renew expiry of the session here
+	m.mu.Lock()
 	m.sessions[sessionID] = Session{
 		Data: data,
 	}
+	m.sessionTimes[sessionID] = time.Now()
+	m.mu.Unlock()
 
 	return nil
 }

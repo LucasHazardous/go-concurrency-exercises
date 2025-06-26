@@ -10,6 +10,7 @@ package main
 
 import (
 	"container/list"
+	"sync"
 	"testing"
 )
 
@@ -32,6 +33,7 @@ type KeyStoreCache struct {
 	cache map[string]*list.Element
 	pages list.List
 	load  func(string) string
+	mu *sync.Mutex
 }
 
 // New creates a new KeyStoreCache
@@ -39,15 +41,20 @@ func New(load KeyStoreCacheLoader) *KeyStoreCache {
 	return &KeyStoreCache{
 		load:  load.Load,
 		cache: make(map[string]*list.Element),
+		mu: &sync.Mutex{},
 	}
 }
 
 // Get gets the key from cache, loads it from the source if needed
 func (k *KeyStoreCache) Get(key string) string {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+
 	if e, ok := k.cache[key]; ok {
 		k.pages.MoveToFront(e)
 		return e.Value.(page).Value
 	}
+
 	// Miss - load from database and save it in cache
 	p := page{key, k.load(key)}
 	// if cache is full remove the least used item
@@ -58,6 +65,7 @@ func (k *KeyStoreCache) Get(key string) string {
 		// remove from list
 		k.pages.Remove(end)
 	}
+
 	k.pages.PushFront(p)
 	k.cache[key] = k.pages.Front()
 	return p.Value
